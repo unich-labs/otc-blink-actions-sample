@@ -37,7 +37,7 @@ import { AUTHORITY, EX_TOKEN, OTC_TOKEN_ID, PROGRAM_ID } from "@/app/constants";
 
 async function buildInstructionsWrapSol(
   user: PublicKey,
-  amount: number,
+  amount: BN,
 ): Promise<TransactionInstruction[]> {
   const instructions: TransactionInstruction[] = [];
 
@@ -62,7 +62,7 @@ async function buildInstructionsWrapSol(
     SystemProgram.transfer({
       fromPubkey: user,
       toPubkey: associatedTokenAccount,
-      lamports: LAMPORTS_PER_SOL * amount,
+      lamports: amount.toNumber(),
     }),
   );
 
@@ -219,15 +219,36 @@ export const POST = async (req: Request) => {
 
     const lastTradeId = await otcSdk.fetchLastTradeId();
 
+    const order = await otcSdk.fetchOrderAccount(new BN(orderId));
+
+    const parsedAmount = new BN(
+      ethers.parseUnits(amount.toString(), 9).toString(),
+    );
     const fillTx = await otcSdk.fillOrder(
       account,
       exTokenMint,
       new BN(orderId),
       lastTradeId,
-      new BN(ethers.parseUnits(amount.toString(), 9).toString()),
+      parsedAmount,
     );
 
-    transaction.add(fillTx);
+    const value = parsedAmount.mul(order.collateral).div(order.amount);
+
+    const wrapTx = await buildInstructionsWrapSol(account, value);
+
+    const ata = getAssociatedTokenAddressSync(exTokenMint, account);
+
+    transaction.add(
+      // trasnfer SOL
+      SystemProgram.transfer({
+        fromPubkey: account,
+        toPubkey: ata,
+        lamports: value.toNumber(),
+      }),
+      // sync wrapped SOL balance
+      createSyncNativeInstruction(ata),
+      fillTx,
+    );
 
     // set the end user as the fee payer
     transaction.feePayer = account;
