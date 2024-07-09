@@ -23,12 +23,6 @@ import {
   Transaction,
   TransactionInstruction,
 } from "@solana/web3.js";
-import {
-  AUTHORITY,
-  DEFAULT_SOL_ADDRESS,
-  DEFAULT_SOL_AMOUNT,
-  PROGRAM_ID,
-} from "./[id]/const";
 import { OtcSolana } from "@noobmdev/otc-sdk";
 import { BN, web3, Program } from "@coral-xyz/anchor";
 import {
@@ -39,6 +33,7 @@ import {
   getAssociatedTokenAddressSync,
 } from "@solana/spl-token";
 import { ethers } from "ethers";
+import { AUTHORITY, EX_TOKEN, OTC_TOKEN_ID, PROGRAM_ID } from "@/app/constants";
 
 async function buildInstructionsWrapSol(
   user: PublicKey,
@@ -80,24 +75,21 @@ async function buildInstructionsWrapSol(
 export const GET = async (req: Request) => {
   try {
     const requestUrl = new URL(req.url);
-    const { toPubkey, orderId } = validatedQueryParams(requestUrl);
 
+    const orderId = requestUrl.pathname.split("/").slice(-1)[0];
     const connection = new Connection(
       process.env.SOLANA_RPC! || clusterApiUrl("devnet"),
     );
 
-    const otcSdk = new OtcSolana(connection, PROGRAM_ID.toString());
+    const otcSdk = new OtcSolana(connection, PROGRAM_ID);
 
-    await otcSdk.bootstrap(AUTHORITY);
+    await otcSdk.bootstrap(new PublicKey(AUTHORITY));
 
-    const config = await otcSdk.program.account.configAccount.all();
-    console.log("🚀 ~ file: route.ts:94 ~ GET ~ config:", config);
-
-    const order = await otcSdk.fetchOrderAccount(new BN(5));
-    console.log("🚀 ~ file: route.ts:94 ~ GET ~ order:", order);
+    const order = await otcSdk.fetchOrderAccount(new BN(orderId));
+    // console.log("🚀 ~ file: route.ts:94 ~ GET ~ order:", order);
 
     const baseHref = new URL(
-      `/api/actions/fill-order?to=${toPubkey.toBase58()}`,
+      `/api/actions/orders/${orderId}?`,
       requestUrl.origin,
     ).toString();
 
@@ -106,7 +98,7 @@ export const GET = async (req: Request) => {
     const payload: ActionGetResponse = {
       title: "OTC - Fill Order",
       icon: new URL("/solana_devs.jpg", requestUrl.origin).toString(),
-      description: "Fill an open order",
+      description: `Fill an open order ID ${orderId}`,
       label: "Fill Order", // this value will be ignored since `links.actions` exists
       links: {
         actions: [
@@ -178,6 +170,7 @@ export const GET = async (req: Request) => {
       headers: ACTIONS_CORS_HEADERS,
     });
   } catch (err) {
+    console.log("🚀 ~ file: route.ts:173 ~ GET ~ err:", err);
     console.log(err);
     let message = "An unknown error occurred";
     if (typeof err == "string") message = err;
@@ -195,7 +188,9 @@ export const OPTIONS = GET;
 export const POST = async (req: Request) => {
   try {
     const requestUrl = new URL(req.url);
-    const { amount, toPubkey } = validatedQueryParams(requestUrl);
+    const orderId = requestUrl.pathname.split("/").slice(-1)[0];
+
+    const { amount } = validatedQueryParams(requestUrl);
 
     const connection = new Connection(
       process.env.SOLANA_RPC! || clusterApiUrl("devnet"),
@@ -203,7 +198,7 @@ export const POST = async (req: Request) => {
 
     const otcSdk = new OtcSolana(connection, PROGRAM_ID.toString());
 
-    await otcSdk.bootstrap(AUTHORITY);
+    await otcSdk.bootstrap(new PublicKey(AUTHORITY));
 
     const body: ActionPostRequest = await req.json();
 
@@ -218,53 +213,21 @@ export const POST = async (req: Request) => {
       });
     }
 
-    // ensure the receiving account will be rent exempt
-    const minimumBalance = await connection.getMinimumBalanceForRentExemption(
-      0, // note: simple accounts that just store native SOL have `0` bytes of data
-    );
-    if (amount * LAMPORTS_PER_SOL < minimumBalance) {
-      throw `account may not be rent exempt: ${toPubkey.toBase58()}`;
-    }
-
     const transaction = new Transaction();
 
-    const exTokenMint = new web3.PublicKey(
-      "So11111111111111111111111111111111111111112",
-    );
+    const exTokenMint = new web3.PublicKey(EX_TOKEN);
 
-    const lastOrderId = await otcSdk.fetchLastOrderId();
+    const lastTradeId = await otcSdk.fetchLastTradeId();
 
-    const createOrderTx = await otcSdk.createOrder(
-      lastOrderId,
+    const fillTx = await otcSdk.fillOrder(
       account,
-      {
-        buy: {},
-      },
       exTokenMint,
-      new BN(1),
-      new BN(100000),
-      new BN(300000),
-      new BN(0),
-      false,
+      new BN(orderId),
+      lastTradeId,
+      new BN(ethers.parseUnits(amount.toString(), 9).toString()),
     );
 
-    const wrapSolTx = await buildInstructionsWrapSol(account, 1);
-
-    transaction.add(
-      ComputeBudgetProgram.setComputeUnitPrice({
-        microLamports: 10000,
-      }),
-      // ...wrapSolTx,
-      // trasnfer SOL
-      // SystemProgram.transfer({
-      //   fromPubkey: account,
-      //   toPubkey: userATA,
-      //   lamports: 1000000000,
-      // }),
-      // // sync wrapped SOL balance
-      // createSyncNativeInstruction(userATA),
-      createOrderTx,
-    );
+    transaction.add(fillTx);
 
     // set the end user as the fee payer
     transaction.feePayer = account;
@@ -276,10 +239,10 @@ export const POST = async (req: Request) => {
     const payload: ActionPostResponse = await createPostResponse({
       fields: {
         transaction,
-        message: `Send ${amount} SOL to ${toPubkey.toBase58()}`,
+        message: `Fill ${amount.toString()} of order ${new BN(5).toString()}`,
+        // message: `Send ${amount} SOL to ${toPubkey.toBase58()}`,
       },
       // note: no additional signers are needed
-      // signers: [],
     });
 
     return Response.json(payload, {
@@ -297,39 +260,17 @@ export const POST = async (req: Request) => {
 };
 
 function validatedQueryParams(requestUrl: URL) {
-  let toPubkey: PublicKey = DEFAULT_SOL_ADDRESS;
-  let amount: number = DEFAULT_SOL_AMOUNT;
-  let orderId: number = 400000000;
-
-  try {
-    if (requestUrl.searchParams.get("orderId")) {
-      orderId = parseInt(requestUrl.searchParams.get("orderId")!);
-    }
-  } catch (err) {
-    throw "Invalid input query parameter: orderId";
-  }
-
-  try {
-    if (requestUrl.searchParams.get("to")) {
-      toPubkey = new PublicKey(requestUrl.searchParams.get("to")!);
-    }
-  } catch (err) {
-    throw "Invalid input query parameter: to";
-  }
+  let amount: number = 0;
 
   try {
     if (requestUrl.searchParams.get("amount")) {
       amount = parseFloat(requestUrl.searchParams.get("amount")!);
     }
-
-    if (amount <= 0) throw "amount is too small";
   } catch (err) {
     throw "Invalid input query parameter: amount";
   }
 
   return {
-    orderId,
     amount,
-    toPubkey,
   };
 }

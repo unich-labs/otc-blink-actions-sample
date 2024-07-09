@@ -17,10 +17,15 @@
     "@radix-ui/react-label": "^2.0.2",
     "@radix-ui/react-navigation-menu": "^1.1.4",
     "@radix-ui/react-slot": "^1.0.2",
+    "@radix-ui/themes": "^3.1.1",
     "@solana/actions": "^1.0.1",
     "@solana/qr-code-styling": "^1.6.0",
     "@solana/spl-token": "^0.4.7",
-    "@solana/web3.js": "^1.92.3",
+    "@solana/wallet-adapter-base": "^0.9.23",
+    "@solana/wallet-adapter-react": "^0.15.35",
+    "@solana/wallet-adapter-react-ui": "^0.9.35",
+    "@solana/wallet-adapter-wallets": "^0.19.32",
+    "@solana/web3.js": "^1.95.0",
     "bs58": "^5.0.0",
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.1.1",
@@ -49,5 +54,10 @@
     "postcss": "^8",
     "tailwindcss": "^3.4.1",
     "typescript": "^5"
+  },
+  "browser": {
+    "fs": false,
+    "path": false,
+    "os": false
   }
 }
