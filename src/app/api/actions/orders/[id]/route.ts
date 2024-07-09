@@ -28,9 +28,12 @@ import { BN, web3, Program } from "@coral-xyz/anchor";
 import {
   NATIVE_MINT,
   createAssociatedTokenAccountInstruction,
+  createCloseAccountInstruction,
   createSyncNativeInstruction,
   getAssociatedTokenAddress,
   getAssociatedTokenAddressSync,
+  getAccount,
+  TokenError,
 } from "@solana/spl-token";
 import { ethers } from "ethers";
 import { AUTHORITY, EX_TOKEN, OTC_TOKEN_ID, PROGRAM_ID } from "@/app/constants";
@@ -234,20 +237,32 @@ export const POST = async (req: Request) => {
 
     const value = parsedAmount.mul(order.collateral).div(order.amount);
 
-    const wrapTx = await buildInstructionsWrapSol(account, value);
-
     const ata = getAssociatedTokenAddressSync(exTokenMint, account);
 
+    try {
+      let ataAccount = await getAccount(connection, ata);
+    } catch (error: any) {
+      if (error.name === "TokenAccountNotFoundError")
+        transaction.add(
+          createAssociatedTokenAccountInstruction(
+            account, // payer
+            ata, // associated token account
+            account, // owner of the associated token account
+            NATIVE_MINT, // mint address
+          ),
+        );
+    }
+
     transaction.add(
-      // trasnfer SOL
       SystemProgram.transfer({
         fromPubkey: account,
         toPubkey: ata,
         lamports: value.toNumber(),
       }),
-      // sync wrapped SOL balance
+      // Create the sync native instruction
       createSyncNativeInstruction(ata),
       fillTx,
+      // createCloseAccountInstruction(ata, account, account),
     );
 
     // set the end user as the fee payer
